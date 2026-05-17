@@ -60,3 +60,40 @@ Explique ce resultat au patient."""}
 
 print("\n=== Explication SenSante ===")
 print(response2.choices[0].message.content)
+# Exercice 1 : Prompt en Wolof
+response3 = client.chat.completions.create(
+    model="llama-3.1-8b-instant",
+    messages=[
+        {"role": "system",
+         "content": """Tu es un assistant médical sénégalais.
+Réponds en wolof simple mélangé de français.
+Par exemple : 'Yow, dafa am jigeen bi...' 
+Maximum 3 phrases.
+Ne fais JAMAIS de diagnostic toi-même."""},
+        {"role": "user",
+         "content": """Patient : Homme, 35 ans, Ziguinchor
+Température : 38.5 C
+Diagnostic du modèle : grippe (probabilité 65%)
+Explique ce résultat au patient."""}
+    ],
+    max_tokens=200,
+    temperature=0.3
+)
+
+print("\n=== Exercice 1 : Réponse en Wolof ===")
+print(response3.choices[0].message.content)
+# Exercice 2 : Tester différentes températures
+for temp in [0.0, 0.5, 1.0]:
+    response_temp = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {"role": "system",
+             "content": "Tu es un assistant médical sénégalais. Maximum 2 phrases."},
+            {"role": "user",
+             "content": "Patient : Femme, 28 ans, Dakar. Diagnostic : paludisme (72%). Explique."}
+        ],
+        max_tokens=150,
+        temperature=temp
+    )
+    print(f"\n=== Exercice 2 : temperature={temp} ===")
+    print(response_temp.choices[0].message.content)
