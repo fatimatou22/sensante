@@ -1,7 +1,22 @@
+import os
+from dotenv import load_dotenv
+from groq import Groq
+
+# Charger les variables d'environnement
+load_dotenv()
+
+# Client Groq (charge au demarrage)
+groq_client = None
+groq_api_key = os.getenv("GROQ_API_KEY")
+if groq_api_key:
+    groq_client = Groq(api_key=groq_api_key)
+    print("Client Groq initialise.")
+else:
+    print("ATTENTION : GROQ_API_KEY non trouvee. /explain sera desactive.")
+
 from pydantic import BaseModel, Field
 
 # --- Schemas Pydantic ---
-
 class PatientInput(BaseModel):
     """Donnees d'entree : les symptomes d'un patient."""
     age: int = Field(..., ge=0, le=120, description="Age en annees")
@@ -21,8 +36,9 @@ class DiagnosticOutput(BaseModel):
     probabilite: float = Field(..., description="Probabilite du diagnostic")
     confiance: str = Field(..., description="Niveau de confiance")
     message: str = Field(..., description="Recommandation")
+
 # api/main.py
-# API FastAPI pour SenSante – Assistant pre-diagnostic medical
+# API FastAPI pour SenSante - Assistant pre-diagnostic medical
 
 from fastapi import FastAPI
 
@@ -31,7 +47,8 @@ app = FastAPI(
     title="SenSante API",
     description="Assistant pre-diagnostic medical pour le Senegal",
     version="0.2.0"
-);
+)
+
 from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
@@ -62,6 +79,7 @@ def health_check():
         "status": "ok",
         "message": "SenSante API is running"
     }
+
 @app.get("/model-info")
 def model_info():
     return {
@@ -70,27 +88,23 @@ def model_info():
         "classes": list(model.classes_),
         "n_features": model.n_features_in_
     }
+
 @app.post("/predict", response_model=DiagnosticOutput)
 def predict(patient: PatientInput):
-    """
-    Predire un diagnostic a partir des symptomes d'un patient.
-    Recoit les symptomes en JSON, renvoie le diagnostic,
-    la probabilite et une recommandation.
-    """
-    # 1. Encoder les variables categoriques
-    try:
+    # 1. Encoder les variables categorielles
+    if patient.sexe in le_sexe.classes_:
         sexe_enc = le_sexe.transform([patient.sexe])[0]
-    except ValueError:
+    else:
         return DiagnosticOutput(
             diagnostic="erreur",
             probabilite=0.0,
             confiance="aucune",
-            message=f"Sexe invalide : {patient.sexe}. Utiliser M ou F."
+            message=f"Sexe inconnu : {patient.sexe}"
         )
 
-    try:
+    if patient.region in le_region.classes_:
         region_enc = le_region.transform([patient.region])[0]
-    except ValueError:
+    else:
         return DiagnosticOutput(
             diagnostic="erreur",
             probabilite=0.0,
@@ -125,10 +139,10 @@ def predict(patient: PatientInput):
 
     # 5. Generer la recommandation
     messages = {
-        "palu"   : "Suspicion de paludisme. Consultez un medecin rapidement.",
-        "grippe" : "Suspicion de grippe. Repos et hydratation recommandes.",
-        "typh"   : "Suspicion de typhoide. Consultation medicale necessaire.",
-        "sain"   : "Pas de pathologie detectee. Continuez a surveiller."
+        "palu"  : "Suspicion de paludisme. Consultez un medecin rapidement.",
+        "grippe": "Suspicion de grippe. Repos et hydratation recommandes.",
+        "typh"  : "Suspicion de typhoide. Consultation medicale necessaire.",
+        "sain"  : "Pas de pathologie detectee. Continuez a surveiller."
     }
 
     # 6. Renvoyer le resultat
@@ -138,3 +152,59 @@ def predict(patient: PatientInput):
         confiance=confiance,
         message=messages.get(diagnostic, "Consultez un medecin.")
     )
+
+# --- Schemas pour /explain ---
+class ExplainInput(BaseModel):
+    diagnostic: str = Field(..., description="Diagnostic predit par le modele")
+    probabilite: float = Field(..., description="Probabilite du diagnostic")
+    age: int = Field(...)
+    sexe: str = Field(...)
+    temperature: float = Field(...)
+    region: str = Field(...)
+
+class ExplainOutput(BaseModel):
+    explication: str = Field(..., description="Explication en francais")
+    modele_llm: str = Field(default="llama-3.1-8b-instant")
+
+# --- Route POST /explain ---
+SYSTEM_PROMPT = """Tu es un assistant medical senegalais.
+Tu recois un diagnostic et des donnees patient.
+Explique le resultat en francais simple,
+comme un medecin parlerait a son patient.
+Sois rassurant mais recommande toujours une consultation medicale.
+Maximum 3 phrases.
+Ne fais JAMAIS de diagnostic toi-meme.
+Tu expliques uniquement le diagnostic fourni."""
+
+@app.post("/explain", response_model=ExplainOutput)
+def explain(data: ExplainInput):
+    """Explique un diagnostic en francais avec un LLM."""
+    if not groq_client:
+        return ExplainOutput(
+            explication="Service indisponible. Cle API non configuree.",
+            modele_llm="aucun"
+        )
+
+    user_prompt = (
+        f"Patient : {data.sexe}, {data.age} ans, region {data.region}\n"
+        f"Temperature : {data.temperature} C\n"
+        f"Diagnostic du modele : {data.diagnostic} "
+        f"(probabilite {data.probabilite:.0%})\n"
+        f"Explique ce resultat au patient."
+    )
+
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=200,
+            temperature=0.3
+        )
+        explication = response.choices[0].message.content
+    except Exception as e:
+        explication = f"Erreur : {str(e)}"
+
+    return ExplainOutput(explication=explication)
